@@ -4,8 +4,12 @@ import json
 import smtplib
 import logging
 import os
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,6 +95,10 @@ def process_message(ch, method, properties, body):
         logger.warning("Сообщение отклонено (nack без requeue) из-за ошибки отправки")
 
 
+MAX_RETRIES = 15
+RETRY_DELAY = 3
+
+
 def start_consumer():
     credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
     parameters = pika.ConnectionParameters(
@@ -100,8 +108,20 @@ def start_consumer():
         blocked_connection_timeout=300
     )
 
+    connection = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            connection = pika.BlockingConnection(parameters)
+            break
+        except pika.exceptions.AMQPConnectionError:
+            logger.warning(f"⏳ RabbitMQ недоступен (попытка {attempt}/{MAX_RETRIES}). Ждём {RETRY_DELAY} сек...")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
+            else:
+                logger.error("❌ Не удалось подключиться к RabbitMQ после всех попыток")
+                return
+
     try:
-        connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
 
         channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='topic', durable=True)
@@ -118,14 +138,12 @@ def start_consumer():
         logger.info(f"Сервис запущен. Ожидание сообщений из очереди '{QUEUE_NAME}'...")
         channel.start_consuming()
 
-    except pika.exceptions.AMQPConnectionError as e:
-        logger.error(f"Ошибка подключения к RabbitMQ: {e}")
     except KeyboardInterrupt:
         logger.info("Сервис остановлен пользователем")
     except Exception as e:
         logger.error(f"Неожиданная ошибка: {e}")
     finally:
-        if 'connection' in locals() and connection.is_open:
+        if connection and connection.is_open:
             connection.close()
             logger.info("Соединение с RabbitMQ закрыто")
 
