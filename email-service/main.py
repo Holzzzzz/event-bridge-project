@@ -27,10 +27,9 @@ RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
 RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'guest')
 RABBITMQ_PASS = os.getenv('RABBITMQ_PASS', 'guest')
 
-EXCHANGE_NAME = 'event_topic_exchange'
-QUEUE_NAME = 'email_queue'
-ROUTING_KEYS = ['event.registered.vip', 'event.registered.regular']
-
+EXCHANGE_NAME = 'event_topic_exchange'  # уже создан оркестратором
+QUEUE_NAME = 'email_queue'  # уже создана оркестратором
+# Routing keys уже привязаны оркестратором
 
 def send_email(user_email: str, user_name: str, event_name: str) -> bool:
     subject = f"Подтверждение регистрации на {event_name}"
@@ -63,7 +62,6 @@ def send_email(user_email: str, user_name: str, event_name: str) -> bool:
         logger.error(f"Неожиданная ошибка при отправке email на {user_email}: {e}")
         return False
 
-
 def process_message(ch, method, properties, body):
     logger.info(f"Получено сообщение: {body.decode('utf-8')}")
 
@@ -89,15 +87,11 @@ def process_message(ch, method, properties, body):
         ch.basic_ack(delivery_tag=method.delivery_tag)
         logger.info("Сообщение подтверждено (ack)")
     else:
-        # Постоянные ошибки (например, неверные SMTP-данные или невалидный email)
-        # не исправятся при повторной попытке, поэтому не возвращаем в очередь
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
         logger.warning("Сообщение отклонено (nack без requeue) из-за ошибки отправки")
 
-
 MAX_RETRIES = 15
 RETRY_DELAY = 3
-
 
 def start_consumer():
     credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
@@ -123,19 +117,12 @@ def start_consumer():
 
     try:
         channel = connection.channel()
-
-        channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='topic', durable=True)
-
-        channel.queue_declare(queue=QUEUE_NAME, durable=True)
-
-        for routing_key in ROUTING_KEYS:
-            channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME, routing_key=routing_key)
-            logger.info(f"Очередь '{QUEUE_NAME}' привязана к '{EXCHANGE_NAME}' с routing_key='{routing_key}'")
-
+        
+        
         channel.basic_qos(prefetch_count=1)
         channel.basic_consume(queue=QUEUE_NAME, on_message_callback=process_message)
 
-        logger.info(f"Сервис запущен. Ожидание сообщений из очереди '{QUEUE_NAME}'...")
+        logger.info(f"✅ Email-сервис запущен. Ожидание сообщений из очереди '{QUEUE_NAME}'...")
         channel.start_consuming()
 
     except KeyboardInterrupt:
@@ -146,7 +133,6 @@ def start_consumer():
         if connection and connection.is_open:
             connection.close()
             logger.info("Соединение с RabbitMQ закрыто")
-
 
 if __name__ == '__main__':
     start_consumer()
